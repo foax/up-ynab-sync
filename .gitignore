@@ -1,0 +1,19 @@
+# Local configuration and exported API data
+config*.json
+test_config.json
+transactions*.json
+
+# Built binaries
+/up-ynab-sync
+*.exe
+*.test
+
+# Go coverage/profiling output
+coverage.out
+*.coverprofile
+*.prof
+
+# Local editor and OS files
+.DS_Store
+.idea/
+.vscode/
