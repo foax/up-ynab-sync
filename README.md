@@ -62,9 +62,41 @@ Useful flags:
 
 Every YNAB transaction gets a deterministic `import_id` derived from the Up transaction ID, so reruns should be idempotent.
 
+## Container Image
+
+Build a local image:
+
+```sh
+docker build -t up-ynab-sync:local .
+```
+
+Run a config-parse smoke test by mounting your local config file:
+
+```sh
+docker run --rm \
+  -v "$PWD/config.yaml:/config/config.yaml:ro" \
+  up-ynab-sync:local \
+  -config /config/config.yaml \
+  -dry-run
+```
+
+For a real local dry run, pass tokens as environment variables:
+
+```sh
+docker run --rm \
+  -e UP_TOKEN="$UP_TOKEN" \
+  -e YNAB_TOKEN="$YNAB_TOKEN" \
+  -v "$PWD/config.yaml:/config/config.yaml:ro" \
+  up-ynab-sync:local \
+  -config /config/config.yaml \
+  -dry-run
+```
+
 ## Kubernetes CronJob
 
 Run the app as a Kubernetes `CronJob` with non-secret config in a `ConfigMap` and tokens in a `Secret`. A rolling `since_days` window is recommended for scheduled runs; duplicate transactions are avoided by deterministic YNAB `import_id`s.
+
+Mount the config at `/config/config.yaml` and pass `-config /config/config.yaml` to the container.
 
 ```yaml
 apiVersion: v1
@@ -108,7 +140,7 @@ spec:
           restartPolicy: Never
           containers:
             - name: sync
-              image: ghcr.io/example/up-ynab-sync:latest
+              image: up-ynab-sync:local
               args:
                 - -config
                 - /config/config.yaml

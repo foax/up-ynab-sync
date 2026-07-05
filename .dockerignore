@@ -1,0 +1,26 @@
+.git
+.gitignore
+.dockerignore
+
+# Local configuration, secrets, and exported API data
+config*.json
+config*.yaml
+config*.yml
+test_config.json
+test_config.yaml
+test_config.yml
+transactions*.json
+.env*
+
+# Local build and test output
+up-ynab-sync
+*.exe
+*.test
+coverage.out
+*.coverprofile
+*.prof
+
+# Local editor and OS files
+.DS_Store
+.idea/
+.vscode/
