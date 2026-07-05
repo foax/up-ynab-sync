@@ -6,3 +6,5 @@ require (
 	github.com/brunomvsouza/ynab.go v1.5.0
 	github.com/jaydenthomson-mantel/up v1.3.0
 )
+
+require gopkg.in/yaml.v3 v3.0.1

@@ -227,6 +227,38 @@ func TestNormalizeSinceRejectsInvalidValue(t *testing.T) {
 	}
 }
 
+func TestSinceFilterUsesRollingSinceDays(t *testing.T) {
+	cfg := config{SinceDays: 14}
+	now := time.Date(2026, 7, 5, 13, 45, 0, 0, time.FixedZone("ACST", 9*60*60+30*60))
+
+	got, err := cfg.SinceFilter(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "2026-06-21T04:15:00Z" {
+		t.Fatalf("since = %q", got)
+	}
+}
+
+func TestValidateRejectsSinceAndSinceDaysTogether(t *testing.T) {
+	cfg := validConfig()
+	cfg.Since = "2026-06-20"
+	cfg.SinceDays = 14
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected since conflict error")
+	}
+}
+
+func TestValidateRejectsNegativeSinceDays(t *testing.T) {
+	cfg := validConfig()
+	cfg.SinceDays = -1
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected since days error")
+	}
+}
+
 func TestValidateAcceptsMultipleAccountMappings(t *testing.T) {
 	cfg := config{
 		UpToken:      "up-token",
@@ -259,28 +291,22 @@ func TestAccountMappingsFallsBackToSingleAccountFlags(t *testing.T) {
 	}
 }
 
-func TestLoadConfigFileParsesAccountMappings(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	body := `{
-		"up_token": "up-token",
-		"ynab_token": "ynab-token",
-		"ynab_budget_id": "ynab-budget",
-		"since": "2026-06-20",
-		"include_pending": true,
-		"batch_size": 50,
-		"accounts": [
-			{
-				"name": "Spending",
-				"up_account_id": "up-spending",
-				"ynab_account_id": "ynab-spending"
-			},
-			{
-				"name": "Saver",
-				"up_account_id": "up-saver",
-				"ynab_account_id": "ynab-saver"
-			}
-		]
-	}`
+func TestLoadConfigFileParsesYAMLAccountMappings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := `up_token: up-token
+ynab_token: ynab-token
+ynab_budget_id: ynab-budget
+since_days: 14
+include_pending: true
+batch_size: 50
+accounts:
+  - name: Spending
+    up_account_id: up-spending
+    ynab_account_id: ynab-spending
+  - name: Saver
+    up_account_id: up-saver
+    ynab_account_id: ynab-saver
+`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +315,7 @@ func TestLoadConfigFileParsesAccountMappings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.UpToken != "up-token" || cfg.YNABBudgetID != "ynab-budget" {
+	if cfg.UpToken != "up-token" || cfg.YNABBudgetID != "ynab-budget" || cfg.SinceDays != 14 {
 		t.Fatalf("unexpected config: %#v", cfg)
 	}
 	if len(cfg.Accounts) != 2 {
@@ -297,6 +323,21 @@ func TestLoadConfigFileParsesAccountMappings(t *testing.T) {
 	}
 	if cfg.Accounts[1].Name != "Saver" || cfg.Accounts[1].YNABAccountID != "ynab-saver" {
 		t.Fatalf("unexpected second account: %#v", cfg.Accounts[1])
+	}
+}
+
+func TestLoadConfigFileRejectsJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"ynab_budget_id":"ynab-budget"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := loadConfigFile(path)
+	if err == nil {
+		t.Fatal("expected JSON config error")
+	}
+	if !strings.Contains(err.Error(), "convert it to YAML") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -376,6 +417,18 @@ func TestYNABCreateTransactionsUsesTransferPayeeID(t *testing.T) {
 	}
 	if tx.TransferAccountID != nil {
 		t.Fatalf("transfer_account_id should not be posted, got %#v", *tx.TransferAccountID)
+	}
+}
+
+func validConfig() config {
+	return config{
+		UpToken:      "up-token",
+		YNABToken:    "ynab-token",
+		YNABBudgetID: "ynab-budget",
+		BatchSize:    1,
+		Accounts: []accountMapping{
+			{UpAccountID: "up-account", YNABAccountID: "ynab-account"},
+		},
 	}
 }
 

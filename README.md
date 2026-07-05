@@ -11,36 +11,32 @@ The current `up` module release has an incomplete transaction model, so transact
 
 ## Usage
 
-For multiple Up accounts, create a config file:
+For multiple Up accounts, create a YAML config file:
 
-```json
-{
-  "up_token": "up:yeah:...",
-  "ynab_token": "...",
-  "ynab_budget_id": "...",
-  "since": "2026-01-01",
-  "accounts": [
-    {
-      "name": "Spending",
-      "up_account_id": "...",
-      "ynab_account_id": "..."
-    },
-    {
-      "name": "Saver",
-      "up_account_id": "...",
-      "ynab_account_id": "..."
-    }
-  ]
-}
+```yaml
+ynab_budget_id: "..."
+since_days: 14
+batch_size: 100
+include_pending: false
+accounts:
+  - name: Spending
+    up_account_id: "..."
+    ynab_account_id: "..."
+  - name: Saver
+    up_account_id: "..."
+    ynab_account_id: "..."
 ```
 
 Then run:
 
 ```sh
-go run . -config config.json -dry-run
+export UP_TOKEN="up:yeah:..."
+export YNAB_TOKEN="..."
+
+go run . -config config.yaml -dry-run
 ```
 
-Tokens can be omitted from the file and supplied with `UP_TOKEN` and `YNAB_TOKEN`.
+Tokens should normally be omitted from the file and supplied with `UP_TOKEN` and `YNAB_TOKEN`.
 
 For a single account, you can still use environment variables:
 
@@ -56,14 +52,78 @@ go run . -since 2026-01-01
 
 Useful flags:
 
-- `-config PATH` reads a JSON config file with one or more account mappings.
+- `-config PATH` reads a YAML config file with one or more account mappings.
 - `-dry-run` prints the transactions that would be sent to YNAB.
 - `-since YYYY-MM-DD` limits Up transactions by creation date. RFC3339 timestamps like `2026-01-01T09:30:00+10:30` are also accepted.
+- `-since-days N` limits Up transactions to a rolling lookback window.
 - `-include-pending` includes Up transactions that have not settled yet.
 - `-batch-size N` controls YNAB batch creation size.
 - `-debug` prints YNAB create request summaries and raw YNAB responses.
 
 Every YNAB transaction gets a deterministic `import_id` derived from the Up transaction ID, so reruns should be idempotent.
+
+## Kubernetes CronJob
+
+Run the app as a Kubernetes `CronJob` with non-secret config in a `ConfigMap` and tokens in a `Secret`. A rolling `since_days` window is recommended for scheduled runs; duplicate transactions are avoided by deterministic YNAB `import_id`s.
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: up-ynab-sync-config
+data:
+  config.yaml: |
+    ynab_budget_id: "..."
+    since_days: 14
+    batch_size: 100
+    include_pending: false
+    accounts:
+      - name: Spending
+        up_account_id: "..."
+        ynab_account_id: "..."
+      - name: Saver
+        up_account_id: "..."
+        ynab_account_id: "..."
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: up-ynab-sync-secrets
+stringData:
+  UP_TOKEN: "up:yeah:..."
+  YNAB_TOKEN: "..."
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: up-ynab-sync
+spec:
+  schedule: "15 * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: sync
+              image: ghcr.io/example/up-ynab-sync:latest
+              args:
+                - -config
+                - /config/config.yaml
+              envFrom:
+                - secretRef:
+                    name: up-ynab-sync-secrets
+              volumeMounts:
+                - name: config
+                  mountPath: /config
+                  readOnly: true
+          volumes:
+            - name: config
+              configMap:
+                name: up-ynab-sync-config
+```
 
 ## Transfers
 

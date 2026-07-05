@@ -1,6 +1,8 @@
 # Local configuration and exported API data
-config*.json
-test_config.json
+config*.yaml
+config*.yml
+test_config.yaml
+test_config.yml
 transactions*.json
 .env.1password
 

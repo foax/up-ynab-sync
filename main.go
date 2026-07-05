@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/brunomvsouza/ynab.go/api"
 	ynabtx "github.com/brunomvsouza/ynab.go/api/transaction"
 	up "github.com/jaydenthomson-mantel/up"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -28,24 +30,25 @@ const (
 )
 
 type config struct {
-	ConfigPath     string           `json:"-"`
-	UpToken        string           `json:"up_token"`
-	YNABToken      string           `json:"ynab_token"`
-	UpAccountID    string           `json:"up_account_id"`
-	YNABBudgetID   string           `json:"ynab_budget_id"`
-	YNABAccountID  string           `json:"ynab_account_id"`
-	Accounts       []accountMapping `json:"accounts"`
-	Since          string           `json:"since"`
-	DryRun         bool             `json:"dry_run"`
-	IncludePending bool             `json:"include_pending"`
-	BatchSize      int              `json:"batch_size"`
-	Debug          bool             `json:"debug"`
+	ConfigPath     string           `json:"-" yaml:"-"`
+	UpToken        string           `json:"up_token" yaml:"up_token"`
+	YNABToken      string           `json:"ynab_token" yaml:"ynab_token"`
+	UpAccountID    string           `json:"up_account_id" yaml:"up_account_id"`
+	YNABBudgetID   string           `json:"ynab_budget_id" yaml:"ynab_budget_id"`
+	YNABAccountID  string           `json:"ynab_account_id" yaml:"ynab_account_id"`
+	Accounts       []accountMapping `json:"accounts" yaml:"accounts"`
+	Since          string           `json:"since" yaml:"since"`
+	SinceDays      int              `json:"since_days" yaml:"since_days"`
+	DryRun         bool             `json:"dry_run" yaml:"dry_run"`
+	IncludePending bool             `json:"include_pending" yaml:"include_pending"`
+	BatchSize      int              `json:"batch_size" yaml:"batch_size"`
+	Debug          bool             `json:"debug" yaml:"debug"`
 }
 
 type accountMapping struct {
-	Name          string `json:"name"`
-	UpAccountID   string `json:"up_account_id"`
-	YNABAccountID string `json:"ynab_account_id"`
+	Name          string `json:"name" yaml:"name"`
+	UpAccountID   string `json:"up_account_id" yaml:"up_account_id"`
+	YNABAccountID string `json:"ynab_account_id" yaml:"ynab_account_id"`
 }
 
 type upTransaction struct {
@@ -113,13 +116,14 @@ func readConfig() (config, error) {
 		BatchSize:     defaultBatchSize,
 	}
 
-	flag.StringVar(&cfg.ConfigPath, "config", "", "path to JSON config file")
+	flag.StringVar(&cfg.ConfigPath, "config", "", "path to YAML config file")
 	flag.StringVar(&cfg.UpToken, "up-token", cfg.UpToken, "Up API token, or UP_TOKEN")
 	flag.StringVar(&cfg.YNABToken, "ynab-token", cfg.YNABToken, "YNAB API token, or YNAB_TOKEN")
 	flag.StringVar(&cfg.UpAccountID, "up-account-id", cfg.UpAccountID, "Up account ID, or UP_ACCOUNT_ID")
 	flag.StringVar(&cfg.YNABBudgetID, "ynab-budget-id", cfg.YNABBudgetID, "YNAB budget ID, or YNAB_BUDGET_ID")
 	flag.StringVar(&cfg.YNABAccountID, "ynab-account-id", cfg.YNABAccountID, "YNAB account ID, or YNAB_ACCOUNT_ID")
 	flag.StringVar(&cfg.Since, "since", cfg.Since, "only sync Up transactions created since YYYY-MM-DD")
+	flag.IntVar(&cfg.SinceDays, "since-days", cfg.SinceDays, "only sync Up transactions created in the last N days")
 	flag.BoolVar(&cfg.DryRun, "dry-run", false, "print planned YNAB transactions without creating them")
 	flag.BoolVar(&cfg.IncludePending, "include-pending", false, "include unsettled Up transactions")
 	flag.IntVar(&cfg.BatchSize, "batch-size", cfg.BatchSize, "YNAB transaction create batch size")
@@ -143,13 +147,22 @@ func readConfig() (config, error) {
 }
 
 func loadConfigFile(path string) (config, error) {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".yaml", ".yml":
+	case ".json":
+		return config{}, fmt.Errorf("config file %q uses JSON; convert it to YAML and use a .yaml or .yml file", path)
+	default:
+		return config{}, fmt.Errorf("config file %q must use .yaml or .yml", path)
+	}
+
 	body, err := os.ReadFile(path)
 	if err != nil {
 		return config{}, fmt.Errorf("read config file %q: %w", path, err)
 	}
 
 	cfg := config{BatchSize: defaultBatchSize}
-	if err := json.Unmarshal(body, &cfg); err != nil {
+	if err := yaml.Unmarshal(body, &cfg); err != nil {
 		return config{}, fmt.Errorf("parse config file %q: %w", path, err)
 	}
 	return cfg, nil
@@ -170,6 +183,9 @@ func mergeConfig(fileCfg, flagCfg config, setFlags map[string]bool) config {
 	}
 	if setFlags["since"] || merged.Since == "" {
 		merged.Since = flagCfg.Since
+	}
+	if setFlags["since-days"] || merged.SinceDays == 0 {
+		merged.SinceDays = flagCfg.SinceDays
 	}
 	if setFlags["batch-size"] || merged.BatchSize == 0 {
 		merged.BatchSize = flagCfg.BatchSize
@@ -230,6 +246,12 @@ func (cfg config) Validate() error {
 			return err
 		}
 	}
+	if cfg.Since != "" && cfg.SinceDays != 0 {
+		return errors.New("set only one of -since or -since-days")
+	}
+	if cfg.SinceDays < 0 {
+		return errors.New("-since-days must be greater than 0")
+	}
 	if cfg.BatchSize < 1 || cfg.BatchSize > 100 {
 		return errors.New("-batch-size must be between 1 and 100")
 	}
@@ -258,9 +280,13 @@ func run(ctx context.Context, cfg config) error {
 	}
 
 	transactionClient := newUpTransactionClient()
+	since, err := cfg.SinceFilter(time.Now())
+	if err != nil {
+		return err
+	}
 	var batches []accountPayloads
 	for _, account := range cfg.accountMappings() {
-		transactions, err := transactionClient.GetTransactions(ctx, cfg.UpToken, account.UpAccountID, cfg.Since)
+		transactions, err := transactionClient.GetTransactions(ctx, cfg.UpToken, account.UpAccountID, since)
 		if err != nil {
 			return fmt.Errorf("fetch Up transactions for %s: %w", account.Label(), err)
 		}
@@ -373,6 +399,16 @@ func normalizeSince(since string) (string, error) {
 		return timestamp.UTC().Format(time.RFC3339), nil
 	}
 	return "", fmt.Errorf("invalid -since value %q: use YYYY-MM-DD or RFC3339 like 2026-06-20T00:00:00Z", since)
+}
+
+func (cfg config) SinceFilter(now time.Time) (string, error) {
+	if cfg.Since != "" {
+		return normalizeSince(cfg.Since)
+	}
+	if cfg.SinceDays > 0 {
+		return now.UTC().AddDate(0, 0, -cfg.SinceDays).Format(time.RFC3339), nil
+	}
+	return "", nil
 }
 
 func (c *upTransactionClient) getPage(ctx context.Context, token, pageURL string) (*upTransactionsPage, error) {
