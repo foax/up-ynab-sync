@@ -2,6 +2,7 @@
 config*.json
 test_config.json
 transactions*.json
+.env.1password
 
 # Built binaries
 /up-ynab-sync
